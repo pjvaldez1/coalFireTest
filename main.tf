@@ -30,6 +30,15 @@ resource "aws_subnet" "PublicSubnet1" {
  }
 }
 
+resource "aws_subnet" "PublicSubnet2" {
+  vpc_id = "${aws_vpc.prodVPC.id}"
+  cidr_block = "10.1.1.0/24"
+ 
+ tags = {
+   Name = "PublicSub2"
+ }
+}
+
 
 #resource "aws_route#53_record" "www" {
 #  zone_id = aws_route53_zone.primary.zone_id
