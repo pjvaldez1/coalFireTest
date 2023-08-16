@@ -5,6 +5,12 @@ terraform {
       version = "~> 4.16"
     }
   }
+  
+  backend "s3" {
+    bucket = "pjtfstate"
+    key    = "terraform"
+    region = "us-west-2"
+  }
 
   required_version = ">= 1.2.0"
 }
@@ -39,6 +45,14 @@ resource "aws_subnet" "PublicSubnet2" {
  }
 }
 
+resource "aws_subnet" "PrivateSubnet1" {
+  vpc_id = "${aws_vpc.prodVPC.id}"
+  cidr_block = "10.1.2.0/24"
+ 
+ tags = {
+   Name = "PrivateSub1"
+ }
+}
 
 #resource "aws_route#53_record" "www" {
 #  zone_id = aws_route53_zone.primary.zone_id
