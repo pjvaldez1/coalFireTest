@@ -19,21 +19,24 @@ provider "aws" {
   region = "us-west-2"
 }
 
-#resource "tls_private_key" "web_key" {
-#  algorithm = "RSA"
-#  rsa_bits  = 4096
-#}
 
-#resource "local_file" "private_key" {
-#  content         = tls_private_key.web_key.private_key_pem
-#  filename        = "sysAccess.pem"
-#  file_permission = 0400
-#}
+# Generates a secure private key and encodes it as PEM
+resource "tls_private_key" "example" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
 
-#resource "aws_key_pair" "sys_key" {
-#  key_name   = "mykey22"
-#  public_key = tls_private_key.web_key.public_key_openssh
-#}
+# Create the Key Pair
+resource "aws_key_pair" "generated_key" {
+  key_name   = "adminKey"
+  public_key = tls_private_key.example.public_key_openssh
+}
+
+# Save file
+resource "local_file" "ssh_key" {
+  filename = "${aws_key_pair.generated_key.key_name}.pem"
+  content  = tls_private_key.example.private_key_pem
+}
 
 resource "aws_vpc" "prodVPC" {
   cidr_block = "10.1.0.0/16"
@@ -142,22 +145,109 @@ resource "aws_security_group" "web_fw" {
   }
 
   ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
+    description = "RDP access"
+    from_port   = 3389
+    to_port     = 3389 
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    #cidr_blocks = ["0.0.0.0/0"]
+
+    cidr_blocks = ["71.227.192.209/32"]
   }
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0",aws_subnet.PrivateSubnet1.cidr_block,aws_subnet.PrivateSubnet2.cidr_block]
   }
   tags = {
     Name = "web_fw"
   }
 }
+
+
+resource "aws_security_group" "wp_sg1" {
+  name        = "wp_sg1"
+  description = "Least permissive in Private Subnet1"
+  vpc_id      = aws_vpc.prodVPC.id
+
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [aws_subnet.PrivateSubnet1.cidr_block,aws_subnet.PublicSubnet1.cidr_block]
+  }
+  
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [aws_subnet.PrivateSubnet1.cidr_block,aws_subnet.PrivateSubnet2.cidr_block,aws_subnet.DBSubnet1.cidr_block]
+  }
+
+  tags = {
+    Name = "wp_sg1"
+
+  }
+}
+
+resource "aws_security_group" "wp_sg2" {
+  name        = "wp_sg2"
+  description = "Least permissive in Private Subnet2"
+  vpc_id      = aws_vpc.prodVPC.id
+
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [aws_subnet.PrivateSubnet2.cidr_block,aws_subnet.PublicSubnet1.cidr_block]
+  }
+  
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [aws_subnet.PrivateSubnet1.cidr_block,aws_subnet.PrivateSubnet2.cidr_block,aws_subnet.DBSubnet1.cidr_block]
+  }
+
+  tags = {
+    Name = "wp_sg2"
+
+  }
+}
+
+resource "aws_security_group" "db_sg" {
+  name        = "db_sg"
+  description = "Least permissive in DB Subnet"
+  vpc_id      = aws_vpc.prodVPC.id
+
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [aws_subnet.DBSubnet1.cidr_block,aws_subnet.PrivateSubnet1.cidr_block,aws_subnet.PrivateSubnet2.cidr_block]
+  }
+  
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [aws_subnet.DBSubnet1.cidr_block]
+  }
+
+  tags = {
+    Name = "db_sg"
+
+  }
+}
+
+data "template_file" "user_datapowershell" {
+  template = <<EOF
+<powershell>
+Rename-Computer -NewName "bastion1" -Force -Restart
+</powershell>
+EOF
+}
+
 
 resource "aws_instance" "pubOS1" {
   depends_on = [
@@ -167,8 +257,12 @@ resource "aws_instance" "pubOS1" {
   instance_type          = "t3a.micro"
   subnet_id              = aws_subnet.PublicSubnet1.id
   vpc_security_group_ids = [aws_security_group.web_fw.id]
+  user_data = data.template_file.user_datapowershell.rendered
+  #key_name = aws_key_pair.key_pair.key_name
+  key_name      = aws_key_pair.generated_key.key_name
+  associate_public_ip_address = true 
 
-  root_block_device {
+root_block_device {
     volume_size = 50
     volume_type = "gp3"
     encrypted   = true
@@ -180,6 +274,20 @@ resource "aws_instance" "pubOS1" {
 
 }
 
+data "template_file" "user_data_webOS1" {
+  template = <<EOF
+    #!/bin/bash
+    sudo hostname wpserver1
+  EOF  
+}
+
+data "template_file" "user_data_webOS2" {
+  template = <<EOF
+    #!/bin/bash
+    sudo hostname wpserver2
+  EOF  
+}
+
 resource "aws_instance" "webOS1" {
   depends_on = [
     aws_security_group.web_fw
@@ -187,7 +295,14 @@ resource "aws_instance" "webOS1" {
   ami                    = "ami-00aa0673b34e3c150"
   instance_type          = "t3a.micro"
   subnet_id              = aws_subnet.PrivateSubnet1.id
-  vpc_security_group_ids = [aws_security_group.web_fw.id]
+  vpc_security_group_ids = [aws_security_group.wp_sg1.id]
+  #user_data = data.template_file.user_data_webOS1.rendered
+
+ provisioner "remote-exec" {
+  inline = ["sudo hostnamectl set-hostname wpserver1"]
+ }
+
+  key_name      = aws_key_pair.generated_key.key_name 
 
   root_block_device {
     volume_size = 20
@@ -208,8 +323,12 @@ resource "aws_instance" "webOS2" {
   ami                    = "ami-00aa0673b34e3c150"
   instance_type          = "t3a.micro"
   subnet_id              = aws_subnet.PrivateSubnet2.id
-  vpc_security_group_ids = [aws_security_group.web_fw.id]
-
+  vpc_security_group_ids = [aws_security_group.wp_sg2.id]
+  user_data = data.template_file.user_data_webOS2.rendered
+  provisioner "remote-exec" {
+   inline = ["sudo hostnamectl set-hostname wpserver2"]
+  }
+  key_name      = aws_key_pair.generated_key.key_name
   root_block_device {
     volume_size = 20
     volume_type = "gp3"
@@ -230,16 +349,21 @@ resource "aws_db_subnet_group" "dbSubnets" {
   }
 }
 
-resource "aws_db_instance" "web_db" {
-  db_name              = "RDS1"
-  engine               = "postgres"
-  engine_version       = "11"
-  instance_class       = "db.t3.micro"
-  username             = "foo"
-  password             = "foobarbaz"
-  db_subnet_group_name = aws_db_subnet_group.dbSubnets.name
-  allocated_storage    = 50
-}
+#resource "aws_db_instance" "web_db" {
+#  db_name              = "RDS1"
+#  engine               = "postgres"
+#  engine_version       = "11"
+#  instance_class       = "db.t3.micro"
+#  username             = "foo"
+#  password             = "foobarbaz"
+#  db_subnet_group_name = aws_db_subnet_group.dbSubnets.name
+#  vpc_security_group_ids = [aws_security_group.db_sg.id]
+#  allocated_storage    = 50
+#  skip_final_snapshot  = true
+#  apply_immediately    = true
+#  backup_retention_period = 0
+#  ##BadPractice, shutting off the backups for dev-test purposes.
+#}
 
 #resource "aws_route#53_record" "www" {
 #  zone_id = aws_route53_zone.primary.zone_id
