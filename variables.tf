@@ -1,8 +1,10 @@
+
 variable "region" {
   type = string 
   description = "Region for VPC"
-  default = "us-west-2"
-  #default = "us-gov-west-1"
+  #testing with us-west-2
+  #default = "us-west-2"
+  default = "us-gov-west-1"
 }
 
 variable "azs" {
