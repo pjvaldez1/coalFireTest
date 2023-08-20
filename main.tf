@@ -16,7 +16,7 @@ terraform {
 }
 
 provider "aws" {
-  region = "us-west-2"
+  region = var.region
 }
 
 
@@ -113,7 +113,8 @@ resource "aws_subnet" "PrivateSubnet2" {
 
 resource "aws_subnet" "DBSubnet1" {
   vpc_id            = aws_vpc.prodVPC.id
-  availability_zone = "us-west-2a"
+  #availability_zone = "us-west-2a"
+  availability_zone = tolist(var.azs)[0]
   cidr_block        = "10.1.4.0/24"
 
   tags = {
@@ -124,7 +125,8 @@ resource "aws_subnet" "DBSubnet1" {
 resource "aws_subnet" "DBSubnet2" {
 
   vpc_id            = aws_vpc.prodVPC.id
-  availability_zone = "us-west-2b"
+  #availability_zone = "us-west-2b"
+  availability_zone = tolist(var.azs)[1]
   cidr_block        = "10.1.5.0/24"
 
   tags = {
@@ -149,8 +151,7 @@ resource "aws_security_group" "web_fw" {
     from_port   = 3389
     to_port     = 3389 
     protocol    = "tcp"
-    #cidr_blocks = ["0.0.0.0/0"]
-
+    #TEST, access from Home....I mean not my home....
     cidr_blocks = ["71.227.192.209/32"]
   }
   egress {
@@ -274,19 +275,27 @@ root_block_device {
 
 }
 
-data "template_file" "user_data_webOS1" {
-  template = <<EOF
-    #!/bin/bash
-    sudo hostname wpserver1
-  EOF  
+resource "aws_eip" "eip_pubOS1" {
+  instance = aws_instance.pubOS1.id
+  vpc = true
 }
 
-data "template_file" "user_data_webOS2" {
-  template = <<EOF
-    #!/bin/bash
-    sudo hostname wpserver2
-  EOF  
-}
+
+
+
+# data "template_file" "user_data_webOS1" {
+#  template = <<EOF
+#    #!/bin/bash
+#    sudo hostname wpserver1
+#  EOF  
+#}
+
+# data "template_file" "user_data_webOS2" {
+#  template = <<EOF
+#    #!/bin/bash
+#    sudo hostname wpserver2
+#  EOF  
+#}
 
 resource "aws_instance" "webOS1" {
   depends_on = [
@@ -296,11 +305,28 @@ resource "aws_instance" "webOS1" {
   instance_type          = "t3a.micro"
   subnet_id              = aws_subnet.PrivateSubnet1.id
   vpc_security_group_ids = [aws_security_group.wp_sg1.id]
-  #user_data = data.template_file.user_data_webOS1.rendered
 
- provisioner "remote-exec" {
-  inline = ["sudo hostnamectl set-hostname wpserver1"]
- }
+ ####################
+ ## Pause, Time Constraint  ##
+ #
+ # Issue, No access to instance from Terraform client
+ # The SecurityGroup for this client is locked in a non-PublicSubnet.
+ # Remote-exec will not work.
+ # 
+ # provisioner "remote-exec" {
+ # inline = ["sudo hostnamectl set-hostname wpserver1"]
+ # connection {
+ #  host        = coalesce(self.public_ip, self.private_ip)
+ #  agent       = false
+ #  type        = "ssh"
+ #  user        = "ec2-user"
+ #  private_key = file("${aws_key_pair.generated_key.key_name}.pem")
+ #  }
+ # }
+ # 
+ # Going to Figure out on a later day.
+ #
+ ####################
 
   key_name      = aws_key_pair.generated_key.key_name 
 
@@ -324,10 +350,6 @@ resource "aws_instance" "webOS2" {
   instance_type          = "t3a.micro"
   subnet_id              = aws_subnet.PrivateSubnet2.id
   vpc_security_group_ids = [aws_security_group.wp_sg2.id]
-  user_data = data.template_file.user_data_webOS2.rendered
-  provisioner "remote-exec" {
-   inline = ["sudo hostnamectl set-hostname wpserver2"]
-  }
   key_name      = aws_key_pair.generated_key.key_name
   root_block_device {
     volume_size = 20
@@ -349,22 +371,24 @@ resource "aws_db_subnet_group" "dbSubnets" {
   }
 }
 
-#resource "aws_db_instance" "web_db" {
-#  db_name              = "RDS1"
-#  engine               = "postgres"
-#  engine_version       = "11"
-#  instance_class       = "db.t3.micro"
-#  username             = "foo"
-#  password             = "foobarbaz"
-#  db_subnet_group_name = aws_db_subnet_group.dbSubnets.name
-#  vpc_security_group_ids = [aws_security_group.db_sg.id]
-#  allocated_storage    = 50
-#  skip_final_snapshot  = true
-#  apply_immediately    = true
-#  backup_retention_period = 0
-#  ##BadPractice, shutting off the backups for dev-test purposes.
-#}
+resource "aws_db_instance" "web_db" {
+  db_name              = "RDS1"
+  engine               = "postgres"
+  engine_version       = "11"
+  instance_class       = "db.t3.micro"
+  username             = "foo"
+  password             = "foobarbaz"
+  db_subnet_group_name = aws_db_subnet_group.dbSubnets.name
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+  allocated_storage    = 50
+  skip_final_snapshot  = true
+  apply_immediately    = true
+  backup_retention_period = 0
+  ##BadPractice, shutting off the backups for dev-test purposes.
+}
 
+
+#Note: Only Compute...Soooo no services....
 #resource "aws_route#53_record" "www" {
 #  zone_id = aws_route53_zone.primary.zone_id
 #  name    = "www.example.com"
